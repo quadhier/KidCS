@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <sys/time.h>
 #include <time.h>
+#include <pthread.h>
 
 #include "kid_map.h"
 
@@ -334,8 +335,11 @@ char * process_query(int method, const char * query)
 	return result;
 }
 
-void process_connection(int connfd)
+void * process_connection(void *pconnfd)
 {
+
+	int connfd = *(int *)pconnfd;
+
 	// set timeout for receiving message
 	struct timeval timeout;
 	timeout.tv_sec = 0;
@@ -361,7 +365,8 @@ void process_connection(int connfd)
 	{
 		fprintf(stderr, "Invalid Request Line\n");
 		close(connfd);
-		return;
+		free(pconnfd);
+		return NULL;
 	}
 	// set the file pointer to the start of the request header
 	// lseek(connfd, rline.len + 2, SEEK_CUR); // lseek is invalid to socket
@@ -403,7 +408,8 @@ void process_connection(int connfd)
 		free(rline.uri);
 		kid_map_free(&hdr_params);
 		close(connfd);
-		return;
+		free(pconnfd);
+		return NULL;
 	}
 
 	printf("request method: %s\nrequest uri: %s\nhttp verion: %s\n",
@@ -459,6 +465,8 @@ void process_connection(int connfd)
 	kid_map_free(&hdr_params);
 	free(proc_res);
 	close(connfd);
+	free(pconnfd);
+	return NULL;
 }
 
 
@@ -521,7 +529,7 @@ int main()
 	while(1)
 	{
 		// accept a client connection
-		printf("waiting\n");
+//		printf("waiting\n");
 		connfd = accept(sockfd, (struct sockaddr *)&client, &client_addrlength);
 		if(connfd < 0)
 		{
@@ -533,8 +541,17 @@ int main()
 			printf("connected with ip: %s, and port %d\n", 
 					inet_ntop(AF_INET, &client.sin_addr, remote, INET_ADDRSTRLEN), 
 					ntohs(client.sin_port));
+			// allocate memory for each connection socket descriptor
+			int *pconnfd = malloc(sizeof(int));
+			*pconnfd = connfd;
 
-			process_connection(connfd);
+			// set thread detached
+			pthread_attr_t attr;
+			pthread_attr_init(&attr);
+			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+			pthread_t tid;
+			pthread_create(&tid, &attr, process_connection, pconnfd);
 		}
 	}
 	close(sockfd);
