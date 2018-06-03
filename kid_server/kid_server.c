@@ -334,6 +334,133 @@ char * process_query(int method, const char * query)
 	return result;
 }
 
+void process_connection(int connfd)
+{
+	// set timeout for receiving message
+	struct timeval timeout;
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 10 * 1000;
+	setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(struct timeval));
+
+	//
+	// parse the request line
+	//
+	char req_str[MAX_REQ_LINE_LEN + 1];
+	bzero(req_str, MAX_REQ_LINE_LEN + 1);
+	// read until buffer is full without moving file pointer
+	int recvlen = recv(connfd, req_str, MAX_REQ_LINE_LEN,  MSG_PEEK | MSG_WAITALL); 
+	if(recvlen == -1 && errno == EAGAIN)
+	{
+		recvlen = 0;
+		perror("Timeout");
+	}
+	req_str[recvlen] = '\0'; // make it a C-style string
+	struct req_line rline = parse_req_line(req_str); 
+	// rline.uri won't be allocated unless req_str if successfully parsed
+	if(rline.method == -1)
+	{
+		fprintf(stderr, "Invalid Request Line\n");
+		close(connfd);
+		return;
+	}
+	// set the file pointer to the start of the request header
+	// lseek(connfd, rline.len + 2, SEEK_CUR); // lseek is invalid to socket
+	recv(connfd, req_str, rline.len + 2, MSG_WAITALL);
+
+	//
+	// parse the request header
+	//
+	char hdr_str[MAX_HEADER_PARAM_LEN + 1];
+	bzero(hdr_str, MAX_HEADER_PARAM_LEN + 1);
+	// to store the request header parameters
+	struct kid_map hdr_params;
+	kid_map_init(&hdr_params, 10, equals, free, free);
+	// read until buffer is full without moving file pointer
+	int hasError = 0;
+	while(1)
+	{
+		recvlen = recv(connfd, hdr_str, MAX_REQ_LINE_LEN, MSG_PEEK | MSG_WAITALL);
+		recvlen = recvlen == -1 ? 0 : recvlen;
+		hdr_str[recvlen] = '\0'; // make it a C-style string
+		int len = parse_req_header(hdr_str, &hdr_params);
+		if(len == -1)
+		{
+			hasError = 1;
+			break;
+		}
+		else if(len == 0)
+		{
+			// lseek(connfd, 2, SEEK_CUR);
+			recv(connfd, hdr_str, 2, MSG_WAITALL);
+			break;
+		}
+		// lseek(connfd, len + 2, SEEK_CUR);
+		recv(connfd, hdr_str, len + 2, MSG_WAITALL);
+	}
+	if(hasError == 1)
+	{
+		fprintf(stderr, "Invalid Request Header Parameter\n");
+		free(rline.uri);
+		kid_map_free(&hdr_params);
+		close(connfd);
+		return;
+	}
+
+	printf("request method: %s\nrequest uri: %s\nhttp verion: %s\n",
+			get_method_name(rline.method),
+			rline.uri,
+			rline.version);
+
+	printf("request header:\n");
+	for(int i = 0; i < hdr_params.size; i++)
+	{
+		printf("%s:%s\n", hdr_params.keys[i], kid_map_get(&hdr_params, hdr_params.keys[i]));
+	}
+
+	
+	char *proc_res = NULL;
+	if(rline.method == MTD_GET)	
+	{
+		char *query = strstr(rline.uri, "?");
+		if(query != NULL)
+		{
+			query++;
+			proc_res = process_query(MTD_GET, query);
+		}
+		else
+		{
+			proc_res = malloc(1);
+			proc_res[0] = '\0';
+		}
+	}
+	else if(rline.method == MTD_PUT)
+	{
+		char query[MAX_QUERY_LEN];
+		recvlen = recv(connfd, query, MAX_QUERY_LEN, MSG_WAITALL);	
+		recvlen = recvlen == -1 ? 0 : recvlen;
+		query[recvlen] = '\0';
+		proc_res = process_query(MTD_PUT, query);
+	}
+	
+	if(proc_res == NULL)
+	{
+		proc_res = (char *)malloc(20);
+		strcpy(proc_res, "ERROR_IN_QUERY\n");
+	}
+
+	char resp_line[100];
+	sprintf(resp_line, "HTTP/1.1 200 OK\r\n\r\n");
+	send(connfd, resp_line, strlen(resp_line), 0);
+	send(connfd, proc_res, strlen(proc_res), 0);
+	sprintf(resp_line, "Hello Friend%d\n", rand());
+	send(connfd, resp_line, strlen(resp_line), 0);
+
+	free(rline.uri);
+	kid_map_free(&hdr_params);
+	free(proc_res);
+	close(connfd);
+}
+
 
 int main()
 {
@@ -364,6 +491,12 @@ int main()
 		perror("creating socket failed");
 		assert(sockfd > 0);
 	}
+
+	// for ease of debug
+	// let port reusable immediately without TIME_WAIT to wait
+	int flag = 1;
+	setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
+
 	// bind the socket with the address prepared
 	int ret = bind(sockfd, (struct sockaddr *)&address, sizeof(address));
 	if(ret == -1)
@@ -396,140 +529,12 @@ int main()
 		}
 		else
 		{
-
-			// set timeout for receiving message
-			struct timeval timeout;
-			timeout.tv_sec = 0;
-			timeout.tv_usec = 10 * 1000;
-			setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(struct timeval));
-
-//			// for ease of debug
-//			int flag = 1;
-//			setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
-
 			char remote[INET_ADDRSTRLEN];
 			printf("connected with ip: %s, and port %d\n", 
 					inet_ntop(AF_INET, &client.sin_addr, remote, INET_ADDRSTRLEN), 
 					ntohs(client.sin_port));
 
-
-			//
-			// parse the request line
-			//
-			char req_str[MAX_REQ_LINE_LEN + 1];
-			bzero(req_str, MAX_REQ_LINE_LEN + 1);
-			// read until buffer is full without moving file pointer
-			int recvlen = recv(connfd, req_str, MAX_REQ_LINE_LEN,  MSG_PEEK | MSG_WAITALL); 
-			if(recvlen == -1 && errno == EAGAIN)
-			{
-				recvlen = 0;
-				perror("Timeout");
-			}
-			req_str[recvlen] = '\0'; // make it a C-style string
-			struct req_line rline = parse_req_line(req_str); 
-			// rline.uri won't be allocated unless req_str if successfully parsed
-			if(rline.method == -1)
-			{
-				fprintf(stderr, "Invalid Request Line\n");
-				close(connfd);
-				continue;
-			}
-			// set the file pointer to the start of the request header
-			// lseek(connfd, rline.len + 2, SEEK_CUR); // lseek is invalid to socket
-			recv(connfd, req_str, rline.len + 2, MSG_WAITALL);
-
-			//
-			// parse the request header
-			//
-			char hdr_str[MAX_HEADER_PARAM_LEN + 1];
-			bzero(hdr_str, MAX_HEADER_PARAM_LEN + 1);
-			// to store the request header parameters
-			struct kid_map hdr_params;
-			kid_map_init(&hdr_params, 10, equals, free, free);
-			// read until buffer is full without moving file pointer
-			int hasError = 0;
-			while(1)
-			{
-				recvlen = recv(connfd, hdr_str, MAX_REQ_LINE_LEN, MSG_PEEK | MSG_WAITALL);
-				recvlen = recvlen == -1 ? 0 : recvlen;
-				hdr_str[recvlen] = '\0'; // make it a C-style string
-				int len = parse_req_header(hdr_str, &hdr_params);
-				if(len == -1)
-				{
-					hasError = 1;
-					break;
-				}
-				else if(len == 0)
-				{
-					// lseek(connfd, 2, SEEK_CUR);
-					recv(connfd, hdr_str, 2, MSG_WAITALL);
-					break;
-				}
-				// lseek(connfd, len + 2, SEEK_CUR);
-				recv(connfd, hdr_str, len + 2, MSG_WAITALL);
-			}
-			if(hasError == 1)
-			{
-				fprintf(stderr, "Invalid Request Header Parameter\n");
-				free(rline.uri);
-				kid_map_free(&hdr_params);
-				close(connfd);
-				continue;
-			}
-
-			printf("request method: %s\nrequest uri: %s\nhttp verion: %s\n",
-					get_method_name(rline.method),
-					rline.uri,
-					rline.version);
-
-			printf("request header:\n");
-			for(int i = 0; i < hdr_params.size; i++)
-			{
-				printf("%s:%s\n", hdr_params.keys[i], kid_map_get(&hdr_params, hdr_params.keys[i]));
-			}
-
-			
-			char *proc_res = NULL;
-			if(rline.method == MTD_GET)	
-			{
-				char *query = strstr(rline.uri, "?");
-				if(query != NULL)
-				{
-					query++;
-					proc_res = process_query(MTD_GET, query);
-				}
-				else
-				{
-					proc_res = malloc(1);
-					proc_res[0] = '\0';
-				}
-			}
-			else if(rline.method == MTD_PUT)
-			{
-				char query[MAX_QUERY_LEN];
-				recvlen = recv(connfd, query, MAX_QUERY_LEN, MSG_WAITALL);	
-				recvlen = recvlen == -1 ? 0 : recvlen;
-				query[recvlen] = '\0';
-				proc_res = process_query(MTD_PUT, query);
-			}
-			
-			if(proc_res == NULL)
-			{
-				proc_res = (char *)malloc(20);
-				strcpy(proc_res, "ERROR_IN_QUERY\n");
-			}
-
-			char resp_line[100];
-			sprintf(resp_line, "HTTP/1.1 200 OK\r\n\r\n");
-			send(connfd, resp_line, strlen(resp_line), 0);
-			send(connfd, proc_res, strlen(proc_res), 0);
-			sprintf(resp_line, "Hello Friend%d\n", rand());
-			send(connfd, resp_line, strlen(resp_line), 0);
-
-			free(rline.uri);
-			kid_map_free(&hdr_params);
-			free(proc_res);
-			close(connfd);
+			process_connection(connfd);
 		}
 	}
 	close(sockfd);
