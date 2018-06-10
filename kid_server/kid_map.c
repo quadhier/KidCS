@@ -16,6 +16,8 @@
 //	void **keys;
 //	void **values;
 //	int (* equals)(const void *key1, const void *key2);
+//	void (* freekey)(void *);
+//	void (* freeval)(void *);
 //};
 
 void 
