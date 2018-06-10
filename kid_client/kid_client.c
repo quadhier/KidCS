@@ -8,7 +8,14 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <pthread.h>
 
+struct conn_arg
+{
+	const struct sockaddr *pserver_address;
+	const char *uri;
+	const char *content;
+};
 
 void write_header(int sockfd)
 {
@@ -28,6 +35,20 @@ void write_header(int sockfd)
 	write(sockfd, "\r\n", 2);
 }
 
+void print_client_port(int sockfd)
+{
+	struct sockaddr_in client;
+	socklen_t len = sizeof(client);
+	if(getsockname(sockfd, (struct sockaddr *)&client, &len) != 0)
+	{
+		perror("get client port failed");
+	}
+	else
+	{
+		printf("client port: %d\n", ntohs(client.sin_port));
+	}
+
+}
 
 void print_recv(int sockfd)
 {
@@ -38,6 +59,82 @@ void print_recv(int sockfd)
 		write(STDOUT_FILENO, msg, len == -1 ? 0 : len);
 	}
 }
+
+void * get(void *arg)
+{
+
+	const struct sockaddr *pserver_address = ((struct conn_arg *)arg)->pserver_address;
+	const char *uri = ((struct conn_arg *)arg)->uri;
+
+	// create client socket
+	int sockfd = socket(PF_INET, SOCK_STREAM, 0);
+	assert(sockfd > 0);
+	if(connect(sockfd, pserver_address, sizeof(*pserver_address)) != 0)
+	{
+		perror("connection failed");
+	}
+	else
+	{
+		print_client_port(sockfd);
+	}
+	int flags = fcntl(sockfd, F_GETFL, 0);
+	fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
+	// write request line
+	write(sockfd, "GET ", 4);
+	write(sockfd, uri, strlen(uri));
+	write(sockfd, " HTTP/1.1", 9);
+	write(sockfd, "\r\n", 2);
+
+	write_header(sockfd);
+
+	print_recv(sockfd);
+
+	close(sockfd);
+	return NULL;
+}
+
+void * put(void *arg)
+{
+
+	const struct sockaddr *pserver_address = ((struct conn_arg *)arg)->pserver_address;
+	const char *uri = ((struct conn_arg *)arg)->uri;
+	const char *content = ((struct conn_arg *)arg)->content;
+
+	// create client socket
+	int sockfd = socket(PF_INET, SOCK_STREAM, 0);
+	assert(sockfd > 0);
+	if(connect(sockfd, pserver_address, sizeof(*pserver_address)) != 0)
+	{
+		perror("connection failed");
+	}
+	else
+	{
+		print_client_port(sockfd);
+	}
+	int flags = fcntl(sockfd, F_GETFL, 0);
+	fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
+
+	// write request line
+	write(sockfd, "PUT ", 4);
+	write(sockfd, uri, strlen(uri));
+	write(sockfd, " HTTP/1.1", 9);
+	write(sockfd, "\r\n", 2);
+
+	write_header(sockfd);
+
+	if(content != NULL)
+	{
+		write(sockfd, content, strlen(content));
+	}
+
+	print_recv(sockfd);
+
+	close(sockfd);
+	return NULL;
+}
+
 
 int main(int argc, const char **argv)
 {
@@ -59,45 +156,29 @@ int main(int argc, const char **argv)
 	inet_pton(AF_INET, server_ip, &server_address.sin_addr);
 	server_address.sin_port = htons(server_port);
 
-	// create client socket
-	int sockfd = socket(PF_INET, SOCK_STREAM, 0);
-	assert(sockfd > 0);
-	if(connect(sockfd, (struct sockaddr *)&server_address, sizeof(server_address)) != 0)
-	{
-		perror("connection failed");
-	}
-	int flags = fcntl(sockfd, F_GETFL, 0);
-	fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
-
-
 	if(strcmp(argv[1], "get") == 0)
 	{
-		// write request line
-		write(sockfd, "GET ", 4);
-		write(sockfd, argv[2], strlen(argv[2]));
-		write(sockfd, " HTTP/1.1", 9);
-		write(sockfd, "\r\n", 2);
 
-		write_header(sockfd);
+		struct conn_arg arg = { (struct sockaddr *)&server_address, argv[2], NULL };
+		pthread_t tid;
+		int tnum = 10;
+		pthread_t tids[tnum];
+		for(int i = 0; i < tnum; i++)
+		{
+			pthread_create(&tid, NULL, get, &arg);
+			tids[i] = tid;
+		}
 
-		print_recv(sockfd);
+		for(int i = 0; i < tnum; i++)
+		{
+			pthread_join(tids[i], NULL);
+		}
+
 	}
 	else if(strcmp(argv[1], "put") == 0)
 	{
-		// write request line
-		write(sockfd, "PUT ", 4);
-		write(sockfd, argv[2], strlen(argv[2]));
-		write(sockfd, " HTTP/1.1", 9);
-		write(sockfd, "\r\n", 2);
-
-		write_header(sockfd);
-
-		if(argc > 3)
-		{
-			write(sockfd, argv[3], strlen(argv[3]));
-		}
-
-		print_recv(sockfd);
+		const char *body = argc > 3 ? argv[3] : NULL;
+		struct conn_arg arg = { (struct sockaddr *)&server_address, argv[2], body };
+		put(&arg);
 	}
-	close(sockfd);
 }
