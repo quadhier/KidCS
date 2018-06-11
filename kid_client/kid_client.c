@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <pthread.h>
 
+#define MULTI_REQ 0
+
 struct conn_arg
 {
 	const struct sockaddr *pserver_address;
@@ -160,6 +162,7 @@ int main(int argc, const char **argv)
 	{
 
 		struct conn_arg arg = { (struct sockaddr *)&server_address, argv[2], NULL };
+#if MULTI_REQ
 		pthread_t tid;
 		int tnum = 10;
 		pthread_t tids[tnum];
@@ -173,6 +176,9 @@ int main(int argc, const char **argv)
 		{
 			pthread_join(tids[i], NULL);
 		}
+#else
+		get(&arg);
+#endif
 
 	}
 	else if(strcmp(argv[1], "put") == 0)
