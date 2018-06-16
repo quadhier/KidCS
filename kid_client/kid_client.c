@@ -17,35 +17,40 @@
 struct conn_arg
 {
 	const struct sockaddr *pserver_address;
-	const char *uri;
+	const char *host;
+	const char *rlurl;
 	const char *content;
 };
 
-int write_header(int sockfd)
+int write_header(int sockfd, const char *host)
 {
 	int wcnt = 0;
 	char msg[200];
-	strcpy(msg, "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8\r\n");
+	sprintf(msg, "Host: %s\r\n", host);
 	write(sockfd, msg, strlen(msg));
 	wcnt += strlen(msg);
 
-	strcpy(msg, "accept-encoding: gzip, deflate, br\r\n");
+	strcpy(msg, "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.181 Safari/537.36\r\n");
 	write(sockfd, msg, strlen(msg));
 	wcnt += strlen(msg);
 
-	strcpy(msg, "accept-language: zh-CN,zh;q=0.9,en;q=0.8,la;q=0.7\r\n");
+	strcpy(msg, "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8\r\n");
 	write(sockfd, msg, strlen(msg));
 	wcnt += strlen(msg);
 
-	strcpy(msg, "cache-control: no-cache\r\n");
+//	strcpy(msg, "Accept-Encoding: gzip, deflate, br\r\n");
+//	write(sockfd, msg, strlen(msg));
+//	wcnt += strlen(msg);
+
+	strcpy(msg, "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,la;q=0.7\r\n");
 	write(sockfd, msg, strlen(msg));
 	wcnt += strlen(msg);
 
-	strcpy(msg, "pragma: no-cache\r\n");
+	strcpy(msg, "Cache-Control: no-cache\r\n");
 	write(sockfd, msg, strlen(msg));
 	wcnt += strlen(msg);
 
-	strcpy(msg, "user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.181 Safari/537.36\r\n");
+	strcpy(msg, "Pragma: no-cache\r\n");
 	write(sockfd, msg, strlen(msg));
 	wcnt += strlen(msg);
 
@@ -85,7 +90,8 @@ void * get(void *arg)
 {
 
 	const struct sockaddr *pserver_address = ((struct conn_arg *)arg)->pserver_address;
-	const char *uri = ((struct conn_arg *)arg)->uri;
+	const char *host = ((struct conn_arg*)arg)->host;
+	const char *rlurl = ((struct conn_arg *)arg)->rlurl;
 
 	// create client socket
 	int sockfd = socket(PF_INET, SOCK_STREAM, 0);
@@ -105,14 +111,14 @@ void * get(void *arg)
 	// write request line
 	write(sockfd, "GET ", 4);
 	wcnt += 4;
-	write(sockfd, uri, strlen(uri));
-	wcnt += strlen(uri);
+	write(sockfd, rlurl, strlen(rlurl));
+	wcnt += strlen(rlurl);
 	write(sockfd, " HTTP/1.1", 9);
 	wcnt += 9;
 	write(sockfd, "\r\n", 2);
 	wcnt += 2;
 
-	wcnt += write_header(sockfd);
+	wcnt += write_header(sockfd, host);
 	printf("write %d bytes totally.\n", wcnt);
 
 	int rcnt = print_recv(sockfd);
@@ -126,7 +132,8 @@ void * put(void *arg)
 {
 
 	const struct sockaddr *pserver_address = ((struct conn_arg *)arg)->pserver_address;
-	const char *uri = ((struct conn_arg *)arg)->uri;
+	const char *host = ((struct conn_arg*)arg)->host;
+	const char *rlurl = ((struct conn_arg *)arg)->rlurl;
 	const char *content = ((struct conn_arg *)arg)->content;
 
 	// create client socket
@@ -148,14 +155,14 @@ void * put(void *arg)
 	// write request line
 	write(sockfd, "PUT ", 4);
 	wcnt += 4;
-	write(sockfd, uri, strlen(uri));
-	wcnt += strlen(uri);
+	write(sockfd, rlurl, strlen(rlurl));
+	wcnt += strlen(rlurl);
 	write(sockfd, " HTTP/1.1", 9);
 	wcnt += 9;
 	write(sockfd, "\r\n", 2);
 	wcnt += 2;
 
-	wcnt += write_header(sockfd);
+	wcnt += write_header(sockfd, host);
 
 	if(content != NULL)
 	{
@@ -192,11 +199,10 @@ int get_ip_addr(const char *domain, char *ip)
 	return -1;
 }
 
-int parse_url(const char *url, char *server_ip, int *server_port, char **rlurl)
+int parse_url(const char *url, char *server_ip, int *server_port, char **host, char **rlurl)
 {
 	int urllen = strlen(url);
 	char *rooturl = NULL;
-	char *domain = NULL;
 	const char *slash_end = strchr(url, '/');
 	const char *qmark_end = strchr(url, '?');
 
@@ -243,19 +249,17 @@ int parse_url(const char *url, char *server_ip, int *server_port, char **rlurl)
 		len = strlen(rooturl);
 	}
 
-	domain = (char *)malloc(len + 1);
-	strncpy(domain, rooturl, len);
-	domain[len] = '\0';
+	*host = (char *)malloc(len + 1);
+	strncpy(*host, rooturl, len);
+	(*host)[len] = '\0';
 
-	if(get_ip_addr(domain, server_ip) != 0)
+	if(get_ip_addr(*host, server_ip) != 0)
 	{
 		free(rooturl);
-		free(domain);
 		return -1;
 	}
 	
 	free(rooturl);
-	free(domain);
 	return 0;
 }
 
@@ -275,8 +279,9 @@ int main(int argc, const char **argv)
 	// parse ip and port of the server
 	char server_ip[IPSIZE];
 	int server_port;
+	char *host = NULL;
 	char *rlurl = NULL;
-	if(parse_url(argv[2], server_ip, &server_port, &rlurl) != 0)
+	if(parse_url(argv[2], server_ip, &server_port, &host, &rlurl) != 0)
 	{
 		exit(EXIT_FAILURE);
 	}
@@ -296,7 +301,7 @@ int main(int argc, const char **argv)
 	if(strcmp(argv[1], "get") == 0)
 	{
 
-		struct conn_arg arg = { (struct sockaddr *)&server_address, rlurl, NULL };
+		struct conn_arg arg = { (struct sockaddr *)&server_address, host, rlurl, NULL };
 #if MULTI_REQ
 		pthread_t tid;
 		int tnum = 10;
@@ -319,8 +324,9 @@ int main(int argc, const char **argv)
 	else if(strcmp(argv[1], "put") == 0)
 	{
 		const char *body = argc > 3 ? argv[3] : NULL;
-		struct conn_arg arg = { (struct sockaddr *)&server_address, rlurl, body };
+		struct conn_arg arg = { (struct sockaddr *)&server_address, host, rlurl, body};
 		put(&arg);
 	}
+	free(host);
 	free(rlurl);
 }
