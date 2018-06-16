@@ -66,14 +66,17 @@ void print_client_port(int sockfd)
 
 }
 
-void print_recv(int sockfd)
+int print_recv(int sockfd)
 {
+	int rcnt = 0;
 	int len = 0;
 	char msg[1024];
 	while((len = recv(sockfd, msg, 200, 0)) != 0)
 	{
 		write(STDOUT_FILENO, msg, len == -1 ? 0 : len);
+		rcnt += len > 0 ? len : 0;
 	}
+	return rcnt;
 }
 
 void * get(void *arg)
@@ -110,7 +113,8 @@ void * get(void *arg)
 	wcnt += write_header(sockfd);
 	printf("write %d bytes totally.\n", wcnt);
 
-	print_recv(sockfd);
+	int rcnt = print_recv(sockfd);
+	printf("read %d bytes totally.\n", rcnt);
 
 	close(sockfd);
 	return NULL;
@@ -154,11 +158,12 @@ void * put(void *arg)
 	if(content != NULL)
 	{
 		write(sockfd, content, strlen(content));
+		wcnt += strlen(content);
 	}
-	wcnt += strlen(content);
 	printf("write %d bytes totally.\n", wcnt);
 
-	print_recv(sockfd);
+	int rcnt = print_recv(sockfd);
+	printf("read %d bytes totally.\n", rcnt);
 
 	close(sockfd);
 	return NULL;
