@@ -19,22 +19,36 @@ struct conn_arg
 	const char *content;
 };
 
-void write_header(int sockfd)
+int write_header(int sockfd)
 {
+	int wcnt = 0;
 	char msg[200];
 	strcpy(msg, "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8\r\n");
 	write(sockfd, msg, strlen(msg));
+	wcnt += strlen(msg);
+
 	strcpy(msg, "accept-encoding: gzip, deflate, br\r\n");
 	write(sockfd, msg, strlen(msg));
+	wcnt += strlen(msg);
+
 	strcpy(msg, "accept-language: zh-CN,zh;q=0.9,en;q=0.8,la;q=0.7\r\n");
 	write(sockfd, msg, strlen(msg));
+	wcnt += strlen(msg);
+
 	strcpy(msg, "cache-control: no-cache\r\n");
 	write(sockfd, msg, strlen(msg));
+	wcnt += strlen(msg);
+
 	strcpy(msg, "pragma: no-cache\r\n");
 	write(sockfd, msg, strlen(msg));
+	wcnt += strlen(msg);
+
 	strcpy(msg, "user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.181 Safari/537.36\r\n");
 	write(sockfd, msg, strlen(msg));
+	wcnt += strlen(msg);
+
 	write(sockfd, "\r\n", 2);
+	return wcnt + 2;
 }
 
 void print_client_port(int sockfd)
@@ -82,13 +96,19 @@ void * get(void *arg)
 	int flags = fcntl(sockfd, F_GETFL, 0);
 	fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
+	int wcnt = 0;
 	// write request line
 	write(sockfd, "GET ", 4);
+	wcnt += 4;
 	write(sockfd, uri, strlen(uri));
+	wcnt += strlen(uri);
 	write(sockfd, " HTTP/1.1", 9);
+	wcnt += 9;
 	write(sockfd, "\r\n", 2);
+	wcnt += 2;
 
-	write_header(sockfd);
+	wcnt += write_header(sockfd);
+	printf("write %d bytes totally.\n", wcnt);
 
 	print_recv(sockfd);
 
@@ -118,18 +138,25 @@ void * put(void *arg)
 	fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
 
+	int wcnt = 0;
 	// write request line
 	write(sockfd, "PUT ", 4);
+	wcnt += 4;
 	write(sockfd, uri, strlen(uri));
+	wcnt += strlen(uri);
 	write(sockfd, " HTTP/1.1", 9);
+	wcnt += 9;
 	write(sockfd, "\r\n", 2);
+	wcnt += 2;
 
-	write_header(sockfd);
+	wcnt += write_header(sockfd);
 
 	if(content != NULL)
 	{
 		write(sockfd, content, strlen(content));
 	}
+	wcnt += strlen(content);
+	printf("write %d bytes totally.\n", wcnt);
 
 	print_recv(sockfd);
 
